@@ -1,0 +1,71 @@
+library(httr)
+library(purrr)
+library(XML)
+library(stringr)
+
+## Get the PRT TrueTime data
+
+  # Get the list of routes from GTFS
+  #routes <- read.delim("C:/Users/bryka/OneDrive - UPMC/Desktop/prt/GTFS/routes.txt", sep = ",")
+  #allRoutesGTFS <- noquote(sort(unique(routes$route_short_name)))
+    # only missing routes from the GTFS feed which don't appear in the Clever feed are DQI and MI. Seems fine
+  
+  # Assemble API call
+  key = " "
+  getVehicles <- "http://truetime.portauthority.org/bustime/api/v3/getvehicles?key="
+  getRoutes <- "http://truetime.portauthority.org/bustime/api/v3/getroutes?key="
+  
+  # Get list of routes from the API
+  routeCall <- GET(paste(getRoutes, key, sep = ""))
+  allRoutes <- content(routeCall, type="text", encoding = "UTF-8") %>% xmlToDataFrame(.) 
+  allRoutes <- allRoutes$rt
+  
+  fx_getRoutes <- function(j, cap) {
+    
+    paste("&rt=", paste(allRoutes[1 + (cap*j)], allRoutes[2 + (cap*j)],allRoutes[3 + (cap*j)],allRoutes[4 + (cap*j)],allRoutes[5 + (cap*j)],
+      allRoutes[6 + (cap*j)], allRoutes[7 + (cap*j)],allRoutes[8 + (cap*j)],allRoutes[9 + (cap*j)],allRoutes[10 + (cap*j)],
+      sep = ","), sep = "")
+    
+  }
+  
+  # Package into function
+  fx_call <- function(p) { 
+    
+    GET(paste(getVehicles, key, fx_getRoutes(p, cap = 10), sep = "")) 
+
+  }
+
+  # Make a list to hold the responses; and an index for the loop
+  calls <- list()
+
+  # Ping the P1 buses every minute until we've accumulated X pings
+  while(length(calls) < 2000) {
+  
+      calls <- append(x = calls, values = lapply(0:9, fx_call))
+      Sys.sleep(time = 60)
+      
+  }
+      
+    # need to be cognizant of memory - might need multiple "closes" per day
+  
+  # Parse the XML
+  fx_checker <- function(k) { calls[[k]]$status_code }
+  fx_extractor <- function(k) { 
+    
+    tmp <- content(calls[[k]], type="text", encoding = "UTF-8") %>% xmlToDataFrame(.) 
+    if(!"msg" %in% names(tmp)) {tmp$msg <- NA}
+    tmp
+    
+  }
+  
+  allStatus <- do.call(rbind, lapply(1:length(calls), fx_checker))
+  selection <- which(allStatus == 30)
+  tmpList <- lapply(selection, fx_extractor)
+  dset <- do.call(rbind, lapply(selection, fx_extractor))
+
+    # May need some metadata parsing of the response codes to clean out junk/broken calls and some monitoring to get attention if it goes down
+    # This is the raw dataset
+  
+  # Close the books, savings off the data frame of the feed
+  write.csv(dset, paste("C:/Users/bryka/OneDrive - UPMC/Desktop/prt/Daily feed/buses_", substr(Sys.time(), start = 1, stop = 10), ".csv", sep = ""))
+  
